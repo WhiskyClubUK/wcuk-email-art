@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Poppins:wght@600;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#000}
+#panel{width:600px;height:430px;position:relative;overflow:hidden;font-family:Poppins,Arial,sans-serif;
+  background:radial-gradient(ellipse 80% 70% at 50% 45%,#1E7A45 0%,#11552F 55%,#0A3A20 100%);
+  box-shadow:inset 0 0 0 6px #C9921E,inset 0 0 0 9px #6B4A0C,inset 0 0 60px rgba(0,0,0,.55)}
+#panel:before{content:"";position:absolute;inset:26px;border:2px solid rgba(255,214,120,.35);border-radius:200px/120px}
+.title{position:absolute;top:30px;left:0;right:0;text-align:center}
+.title b{display:block;font-family:'Luckiest Guy',Poppins,sans-serif;font-size:40px;line-height:1;letter-spacing:1px;
+  background:linear-gradient(180deg,#FFF3A8 0%,#FFC93C 45%,#E08A00 100%);-webkit-background-clip:text;color:transparent;
+  filter:drop-shadow(0 3px 0 #5A3A00) drop-shadow(0 6px 10px rgba(0,0,0,.5))}
+.title span{display:inline-block;margin-top:10px;font-weight:800;font-size:12px;letter-spacing:3px;color:#FFE7A6;background:rgba(0,0,0,.35);border:1px solid rgba(255,214,120,.5);border-radius:999px;padding:5px 14px}
+svg{position:absolute;left:0;top:118px}
+.spark{position:absolute;border-radius:50%;background:#FFE58A;box-shadow:0 0 8px 3px rgba(255,210,90,.7)}
+</style></head><body>
+<div id="panel">
+  <div class="title"><b>THE TABLE'S STILL LOADED</b><span>EVERY HIGH-ROLLER CHIP IS STILL IN</span></div>
+  <svg id="s" width="600" height="312" viewBox="0 0 600 312"></svg>
+</div>
+<script>
+const NS='http://www.w3.org/2000/svg';
+const s=document.getElementById('s');
+function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);(p||s).appendChild(e);return e}
+// value, count still in, of, chip colour, edge colour, text colour
+const stacks=[
+ ['£200',12,12,'#141414','#E8B33A','#FFD769'],
+ ['£150',5,5,'#C8202A','#FFFFFF','#FFFFFF'],
+ ['£100',5,5,'#1F4FB8','#FFFFFF','#FFFFFF'],
+ ['£50',5,5,'#0F7A3C','#F2C14E','#FFF4CC'],
+];
+const RX=50, RY=17, H=11, base=228, xs=[90,230,370,510];
+const defs=el('defs',{});
+const g=el('radialGradient',{id:'sh',cx:'50%',cy:'50%',r:'50%'},defs);
+el('stop',{offset:'0','stop-color':'#000','stop-opacity':'.55'},g);el('stop',{offset:'1','stop-color':'#000','stop-opacity':'0'},g);
+stacks.forEach(([v,n,of,c,edge,tc],i)=>{
+  const cx=xs[i];
+  el('ellipse',{cx:cx+8,cy:base+10,rx:RX+18,ry:RY+8,fill:'url(#sh)'});
+  for(let k=0;k<n;k++){
+    const y=base-k*H, jit=(k%3-1)*1.6;
+    const x=cx+jit;
+    // side band
+    el('path',{d:`M${x-RX} ${y-H} L${x-RX} ${y} A${RX} ${RY} 0 0 0 ${x+RX} ${y} L${x+RX} ${y-H} Z`,fill:c});
+    // edge stripes on the band
+    for(let a=0;a<6;a++){
+      const t=-0.85+a*0.34, sx=x+RX*Math.sin(t*1.5);
+      el('rect',{x:sx-4,y:y-H+1,width:8,height:H-1,fill:edge,opacity:.95});
+    }
+    el('path',{d:`M${x-RX} ${y} A${RX} ${RY} 0 0 0 ${x+RX} ${y}`,fill:'none',stroke:'rgba(0,0,0,.35)','stroke-width':1});
+    // top face
+    el('ellipse',{cx:x,cy:y-H,rx:RX,ry:RY,fill:c,stroke:'rgba(0,0,0,.25)','stroke-width':1});
+    if(k===n-1){
+      // face detail on the top chip
+      for(let a=0;a<8;a++){const t=a*Math.PI/4;el('ellipse',{cx:x+Math.cos(t)*(RX-6),cy:y-H+Math.sin(t)*(RY-2.2),rx:6,ry:2.4,fill:edge})}
+      el('ellipse',{cx:x,cy:y-H,rx:RX-14,ry:RY-5,fill:'none',stroke:edge,'stroke-width':1.5,'stroke-dasharray':'3 3'});
+      el('ellipse',{cx:x,cy:y-H,rx:RX-20,ry:RY-7.5,fill:c});
+      const tx=el('text',{x:x,y:y-H+5,'text-anchor':'middle','font-family':"'Luckiest Guy',Poppins,sans-serif",'font-size':17,fill:tc,transform:`translate(0,0)`});tx.textContent=v;
+      // value flag above
+      const top=y-H-RY-18;
+      const fl=el('text',{x:cx,y:top,'text-anchor':'middle','font-family':"'Luckiest Guy',Poppins,sans-serif",'font-size':30,fill:'#FFD769',stroke:'#4A2E00','stroke-width':5,'paint-order':'stroke'});fl.textContent=v;
+    }
+  }
+  // plaque
+  el('rect',{x:cx-50,y:base+30,width:100,height:30,rx:15,fill:'#0B0B0D',stroke:'#C9921E','stroke-width':2});
+  const p=el('text',{x:cx,y:base+50,'text-anchor':'middle','font-family':'Poppins,Arial,sans-serif','font-weight':800,'font-size':13,fill:'#FFE7A6','letter-spacing':1});p.textContent=`${n} OF ${of} IN`;
+});
+// a few sparkles
+const panel=document.getElementById('panel');
+[[40,120,4],[560,140,3],[300,95,3],[150,380,2],[470,370,3],[25,300,2],[575,320,2]].forEach(([x,y,r])=>{const d=document.createElement('div');d.className='spark';Object.assign(d.style,{left:x+'px',top:y+'px',width:r+'px',height:r+'px'});panel.appendChild(d)});
+</script></body></html>
