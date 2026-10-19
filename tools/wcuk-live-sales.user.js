@@ -1,0 +1,181 @@
+// ==UserScript==
+// @name         WCUK live sales for Today's Push
+// @namespace    https://whiskyclubuk.com/
+// @version      1.7
+// @updateURL    https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/main/tools/wcuk-live-sales.user.js
+// @downloadURL  https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/main/tools/wcuk-live-sales.user.js
+// @description  Every 60 seconds, reads Rafflex Analytics (from a pinned Analytics tab) and today's completed orders with your own sign-in and shows the totals on the Today's Push page. Reads only date, source and total; nothing is stored except the day's totals.
+// @match        https://claude.ai/*
+// @match        https://whiskyclubuk.com/admin/analytics*
+// @noframes
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      whiskyclubuk.com
+// @run-at       document-idle
+// ==/UserScript==
+(function () {
+  'use strict';
+  var PAGE_ID = '2NXmVoHY5jqSCigPTi9P5r';      // the Today's Push artifact
+  var SITE = 'https://whiskyclubuk.com';
+  var EVERY_MS = 60 * 1000, MAX_PAGES = 15;
+  var last = null, busy = false;
+
+  function onPage() { return location.pathname.indexOf(PAGE_ID) !== -1; }
+  function get(path) {
+    return new Promise(function (ok, fail) {
+      GM_xmlhttpRequest({ method: 'GET', url: SITE + path, timeout: 20000,
+        onload: function (r) { ok(r); }, onerror: fail, ontimeout: fail });
+    });
+  }
+  function parse(html) {
+    var light = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<svg[\s\S]*?<\/svg>/gi, '');
+    return new DOMParser().parseFromString(light, 'text/html');
+  }
+  function money(s) { var m = String(s || '').replace(/,/g, '').match(/-?£?\s*(-?\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; }
+  function cell(r, i) { return ((r.cells[i] && r.cells[i].textContent) || '').replace(/\s+/g, ' ').trim(); }
+  function isoDay(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  function r2(n) { return Math.round(n * 100) / 100; }
+
+  // Rafflex's own Analytics cards, found by their captions (Sales: "Total Revenue + Credit", Orders: "Orders made"). This is the number Simon checks.
+  // Since 19 Oct the captions run on ("Total Revenue + Credit, by order date."), so a caption only has to start with the label.
+  function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
+  function cardValue(doc, label) {
+    var els = doc.querySelectorAll('body *');
+    for (var i = els.length - 1; i >= 0; i--) {           // deepest first
+      if (els[i].children.length || norm(els[i].textContent).indexOf(label) !== 0) continue;
+      for (var box = els[i].parentElement, up = 0; box && up < 4; box = box.parentElement, up++) {
+        var m = norm(box.textContent).replace(label, '').replace(/,/g, '').match(/£?\s*(\d+(?:\.\d+)?)/);
+        if (m) return parseFloat(m[1]);
+      }
+    }
+    return null;
+  }
+  // Analytics fills its cards in after load, so a fetch sees no figures. A pinned Analytics tab
+  // reads them once rendered and hands them over through Tampermonkey's storage.
+  async function analytics() {
+    var a = GM_getValue('analytics', null);
+    if (!a) return { why: 'open Rafflex Analytics in a pinned tab' };
+    if (a.day !== isoDay(new Date()) || Date.now() - a.at > 3 * 60 * 1000) return { why: 'Analytics tab last read ' + new Date(a.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) };
+    return a;
+  }
+  function analyticsTab() {
+    // The cards count up from zero when the page loads, so only trust a figure once it has held still for 2 seconds.
+    var tries = 0, prev = null, steady = 0;
+    var t = setInterval(function () {
+      tries++;
+      var text = norm(document.body && document.body.textContent);
+      var sales = cardValue(document, 'Total Revenue + Credit'), orders = cardValue(document, 'Orders made');
+      if (sales == null || !/Today\s*-/.test(text)) { if (tries > 80) clearInterval(t); return; }
+      var key = sales + '|' + orders;
+      steady = key === prev ? steady + 1 : 0; prev = key;
+      if (steady >= 4) {
+        clearInterval(t);
+        GM_setValue('analytics', { sales: sales, orders: orders, day: isoDay(new Date()), at: Date.now() });
+      } else if (tries > 80) clearInterval(t);
+    }, 500);
+    // Reload once a minute for fresh figures, unless someone has picked a different date range.
+    setTimeout(function () { if (/Today\s*-/.test(norm(document.body.textContent))) location.reload(); }, EVERY_MS);
+  }
+
+  // Rafflex's orders table (17 Oct layout): Order (with a <time datetime>), Customer, Paid, Source, Status. Columns are
+  // found by their headings so a reshuffle doesn't zero the split again; the old fixed layout is the fallback.
+  function columns(tb) {
+    var h = [].map.call(tb.querySelectorAll('thead th'), function (t) { return norm(t.textContent).toLowerCase(); });
+    var at = function (name, dflt) { var i = h.indexOf(name); return i === -1 ? dflt : i; };
+    return { paid: at('paid', at('total', 3)), source: at('source', 2), status: at('status', 4), date: at('date', 5) };
+  }
+  function when(r, col) {
+    var t = r.querySelector('time[datetime]');
+    return new Date(t ? t.getAttribute('datetime') : cell(r, col.date));
+  }
+  async function scan() {
+    var now = new Date(), start = new Date(now); start.setHours(0, 0, 0, 0);
+    var out = { type: 'wcuk-sales', date: isoDay(now), total_revenue: 0, total_orders: 0, marketing_revenue: 0, marketing_orders: 0, by_source: {} };
+    for (var page = 1; page <= MAX_PAGES; page++) {
+      var res = await get('/admin/orders?per_page=50&page=' + page);
+      var doc = parse(res.responseText || '');
+      var tb = doc.querySelector('table');
+      if (!tb || !tb.tBodies[0]) {
+        if (page === 1) return { type: 'wcuk-sales', state: 'signed_out', date: out.date, checked_at: now.toISOString() };
+        break;
+      }
+      var col = columns(tb);
+      var rows = [].slice.call(tb.tBodies[0].rows).filter(function (r) { return !isNaN(when(r, col)); });
+      if (!rows.length) break;
+      var older = false;
+      rows.forEach(function (r) {
+        var dt = when(r, col);
+        if (dt < start) { older = true; return; }
+        if (!/complete/i.test(cell(r, col.status))) return;
+        var src = (cell(r, col.source).split(' ')[0] || 'unknown').toLowerCase(), total = money(cell(r, col.paid));
+        if (total > 0) out.total_orders++; out.total_revenue += total;
+        var s = out.by_source[src] = out.by_source[src] || { orders: 0, revenue: 0 };
+        if (total > 0) s.orders++; s.revenue += total;
+        if (src === 'attentive') { if (total > 0) out.marketing_orders++; out.marketing_revenue += total; }
+      });
+      if (older) break;
+    }
+    out.total_revenue = r2(out.total_revenue); out.marketing_revenue = r2(out.marketing_revenue);
+    Object.keys(out.by_source).forEach(function (k) { out.by_source[k].revenue = r2(out.by_source[k].revenue); });
+    // Headline figures come from Analytics when it can be read; the orders list still gives the split by source.
+    var a = await analytics();
+    // Analytics adds wallet credit the orders list doesn't show. Remember the gap while Analytics is fresh,
+    // and when its tab goes quiet (Chrome rests background tabs) add that gap to the orders list, so the total never flips back.
+    var listRev = out.total_revenue, listOrders = out.total_orders, gap = GM_getValue('gap', null);
+    if (a.sales != null) {
+      out.total_revenue = r2(a.sales); if (a.orders != null) out.total_orders = Math.round(a.orders); out.from = 'analytics';
+      if (Date.now() - a.at < 90 * 1000) GM_setValue('gap', { day: out.date, rev: a.sales - listRev, orders: (a.orders != null ? a.orders : listOrders) - listOrders });
+    } else if (gap && gap.day === out.date) {
+      out.total_revenue = r2(listRev + gap.rev); out.total_orders = Math.max(0, listOrders + gap.orders); out.from = 'estimate'; out.why = a.why;
+    } else { out.from = 'orders list'; out.why = a.why; }
+    out.state = 'ok'; out.checked_at = now.toISOString();
+    out.as_of = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    return out;
+  }
+
+  // The page sits in nested cross-origin frames, so hand the totals to every frame.
+  function post(msg, w) {
+    w = w || window;
+    for (var i = 0; i < w.frames.length; i++) {
+      try { w.frames[i].postMessage(msg, '*'); post(msg, w.frames[i]); } catch (e) {}
+    }
+  }
+  async function tick() {
+    if (!onPage() || busy) return;
+    busy = true;
+    try { last = await scan(); } catch (e) { last = { type: 'wcuk-sales', state: 'error', checked_at: new Date().toISOString() }; }
+    busy = false;
+    post({ type: 'wcuk-helper', dictate: !!Rec });
+    post(last);
+  }
+  if (location.hostname === 'whiskyclubuk.com') { analyticsTab(); return; }
+
+  // Dictation: the page sits in a sandboxed frame without the microphone, so the top claude.ai tab listens
+  // for it (Chrome asks once for microphone access) and posts the words back into the page.
+  var Rec = window.SpeechRecognition || window.webkitSpeechRecognition, rec = null;
+  function dictate(action) {
+    if (action === 'stop') { if (rec) rec.stop(); return; }
+    if (!Rec || rec) return;
+    rec = new Rec(); rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = function (e) {
+      var text = '';
+      for (var i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+      post({ type: 'wcuk-dictation', text: text });
+    };
+    rec.onerror = function (e) { post({ type: 'wcuk-dictation', error: e.error || 'error' }); };
+    rec.onend = function () { rec = null; post({ type: 'wcuk-dictation', done: true }); };
+    try { rec.start(); } catch (e) { rec = null; post({ type: 'wcuk-dictation', error: 'start' }); }
+  }
+
+  // The page says hello when it loads; answer straight away.
+  window.addEventListener('message', function (ev) {
+    if (!ev.data || !onPage()) return;
+    if (ev.data.type === 'wcuk-dictate') { dictate(ev.data.action); return; }
+    if (ev.data.type !== 'wcuk-sales-hello') return;
+    post({ type: 'wcuk-helper', dictate: !!Rec });
+    if (last) post(last); else tick();
+  });
+  setTimeout(tick, 3000);
+  setInterval(tick, EVERY_MS);
+})();
