@@ -2,8 +2,8 @@
 // @name         WCUK live sales for Today's Push
 // @namespace    https://whiskyclubuk.com/
 // @version      1.7
-// @updateURL    https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/main/tools/wcuk-live-sales.user.js
-// @downloadURL  https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/main/tools/wcuk-live-sales.user.js
+// @updateURL    https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
+// @downloadURL  https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
 // @description  Every 60 seconds, reads Rafflex Analytics (from a pinned Analytics tab) and today's completed orders with your own sign-in and shows the totals on the Today's Push page. Reads only date, source and total; nothing is stored except the day's totals.
 // @match        https://claude.ai/*
 // @match        https://whiskyclubuk.com/admin/analytics*
