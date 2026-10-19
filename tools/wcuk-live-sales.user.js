@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         WCUK live sales for Today's Push
 // @namespace    https://whiskyclubuk.com/
-// @version      1.7
+// @version      1.9
 // @updateURL    https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
 // @downloadURL  https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
-// @description  Every 60 seconds, reads Rafflex Analytics (from a pinned Analytics tab) and today's completed orders with your own sign-in and shows the totals on the Today's Push page. Reads only date, source and total; nothing is stored except the day's totals.
+// @description  Every 60 seconds, reads Rafflex Analytics (from a pinned Analytics tab) and today's completed orders with your own sign-in and shows the totals on the Marketing Desk and HQ pages. On the Marketing Analytics and HQ pages it also reads past orders, a page at a time, and hands over each day's totals by hour and source. Reads only date, source and total; nothing about customers leaves the orders list.
 // @match        https://claude.ai/*
 // @match        https://whiskyclubuk.com/admin/analytics*
 // @noframes
@@ -16,12 +16,17 @@
 // ==/UserScript==
 (function () {
   'use strict';
-  var PAGE_ID = '2NXmVoHY5jqSCigPTi9P5r';      // the Today's Push artifact
+  var PAGE_ID = '2NXmVoHY5jqSCigPTi9P5r';      // the Marketing Desk artifact
+  var ANALYTICS_ID = 'GHGGTQZqCJt69pfKFtbWLo'; // the Marketing Analytics artifact
+  var HQ_ID = 'Bb98bS29Yi9QEoGHT3joMR';        // the Whisky Club HQ front page
   var SITE = 'https://whiskyclubuk.com';
   var EVERY_MS = 60 * 1000, MAX_PAGES = 15;
   var last = null, busy = false;
 
-  function onPage() { return location.pathname.indexOf(PAGE_ID) !== -1; }
+  function onHQ() { return location.pathname.indexOf(HQ_ID) !== -1; }
+  // Today's sales go to the Marketing Desk and to HQ.
+  function onPage() { return location.pathname.indexOf(PAGE_ID) !== -1 || onHQ(); }
+  function onAnalytics() { return location.pathname.indexOf(ANALYTICS_ID) !== -1; }
   function get(path) {
     return new Promise(function (ok, fail) {
       GM_xmlhttpRequest({ method: 'GET', url: SITE + path, timeout: 20000,
@@ -38,11 +43,11 @@
   function r2(n) { return Math.round(n * 100) / 100; }
 
   // Rafflex's own Analytics cards, found by their captions (Sales: "Total Revenue + Credit", Orders: "Orders made"). This is the number Simon checks.
-  // Since 19 Oct the captions run on ("Total Revenue + Credit, by order date."), so a caption only has to start with the label.
   function norm(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
   function cardValue(doc, label) {
     var els = doc.querySelectorAll('body *');
     for (var i = els.length - 1; i >= 0; i--) {           // deepest first
+      // Since 19 Oct the captions run on ("Total Revenue + Credit, by order date."), so a caption only has to start with the label.
       if (els[i].children.length || norm(els[i].textContent).indexOf(label) !== 0) continue;
       for (var box = els[i].parentElement, up = 0; box && up < 4; box = box.parentElement, up++) {
         var m = norm(box.textContent).replace(label, '').replace(/,/g, '').match(/£?\s*(\d+(?:\.\d+)?)/);
@@ -78,17 +83,7 @@
     setTimeout(function () { if (/Today\s*-/.test(norm(document.body.textContent))) location.reload(); }, EVERY_MS);
   }
 
-  // Rafflex's orders table (17 Oct layout): Order (with a <time datetime>), Customer, Paid, Source, Status. Columns are
-  // found by their headings so a reshuffle doesn't zero the split again; the old fixed layout is the fallback.
-  function columns(tb) {
-    var h = [].map.call(tb.querySelectorAll('thead th'), function (t) { return norm(t.textContent).toLowerCase(); });
-    var at = function (name, dflt) { var i = h.indexOf(name); return i === -1 ? dflt : i; };
-    return { paid: at('paid', at('total', 3)), source: at('source', 2), status: at('status', 4), date: at('date', 5) };
-  }
-  function when(r, col) {
-    var t = r.querySelector('time[datetime]');
-    return new Date(t ? t.getAttribute('datetime') : cell(r, col.date));
-  }
+  // Same table reading as the desk's admin-scan.js: cell 0 order no, 2 source, 3 total, 4 status, 5 date.
   async function scan() {
     var now = new Date(), start = new Date(now); start.setHours(0, 0, 0, 0);
     var out = { type: 'wcuk-sales', date: isoDay(now), total_revenue: 0, total_orders: 0, marketing_revenue: 0, marketing_orders: 0, by_source: {} };
@@ -100,15 +95,14 @@
         if (page === 1) return { type: 'wcuk-sales', state: 'signed_out', date: out.date, checked_at: now.toISOString() };
         break;
       }
-      var col = columns(tb);
-      var rows = [].slice.call(tb.tBodies[0].rows).filter(function (r) { return !isNaN(when(r, col)); });
+      var rows = [].slice.call(tb.tBodies[0].rows).filter(function (r) { return /^\d+$/.test(cell(r, 0)); });
       if (!rows.length) break;
       var older = false;
       rows.forEach(function (r) {
-        var dt = when(r, col);
+        var dt = new Date(cell(r, 5)); if (isNaN(dt)) return;
         if (dt < start) { older = true; return; }
-        if (!/complete/i.test(cell(r, col.status))) return;
-        var src = (cell(r, col.source).split(' ')[0] || 'unknown').toLowerCase(), total = money(cell(r, col.paid));
+        if (!/complete/i.test(cell(r, 4))) return;
+        var src = (cell(r, 2) || 'unknown').toLowerCase(), total = money(cell(r, 3));
         if (total > 0) out.total_orders++; out.total_revenue += total;
         var s = out.by_source[src] = out.by_source[src] || { orders: 0, revenue: 0 };
         if (total > 0) s.orders++; s.revenue += total;
@@ -168,8 +162,91 @@
     try { rec.start(); } catch (e) { rec = null; post({ type: 'wcuk-dictation', error: 'start' }); }
   }
 
+
+  // Order history for the Analytics page. Walks the orders list newest first, one page a second, and posts each
+  // finished day (orders, revenue, split by source and by hour) to the page, which saves it. Days the page already
+  // has are skipped. A long backfill picks up where it stopped next time the page is opened.
+  var histBusy = false;
+  // Each page keeps its own place in the walk, so HQ's short top-up never moves the Analytics backfill.
+  function histKey() { return onHQ() ? 'hist-hq' : 'hist'; }
+  function sleep(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+  function blankDay(d) { var o = [], r = []; for (var i = 0; i < 24; i++) { o.push(0); r.push(0); } return { date: d, orders: 0, revenue: 0, zero_orders: 0, by_source: {}, o: o, r: r }; }
+  function finish(day) {
+    day.revenue = r2(day.revenue); day.r = day.r.map(r2);
+    Object.keys(day.by_source).forEach(function (k) { day.by_source[k].revenue = r2(day.by_source[k].revenue); });
+    return day;
+  }
+  async function getPage(page) {
+    for (var tries = 0; tries < 4; tries++) {
+      try {
+        var res = await get('/admin/orders?per_page=50&page=' + page);
+        if (res.status === 200) return res;
+        if (res.status === 401 || res.status === 403) return null;
+      } catch (e) {}
+      await sleep(30000 * (tries + 1));            // the site is busy or blocking: back off and try again
+    }
+    return null;
+  }
+  async function history(have, since) {
+    if (histBusy) return; histBusy = true;
+    var done = {}; (have || []).forEach(function (d) { done[d] = true; });
+    var today = isoDay(new Date()), sent = 0;
+    // Resume a backfill near where it stopped (a little earlier, since new orders push old ones down the list).
+    var saved = GM_getValue(histKey(), null), page = 1, resumed = false;
+    var recentDone = done[isoDay(new Date(Date.now() - 864e5))];
+    if (recentDone && saved && saved.page > 40 && saved.oldest > since) { page = Math.max(1, saved.page - 40); resumed = true; }
+    var cur = null, firstDay = true, oldest = saved && saved.oldest || today;
+    post({ type: 'wcuk-history', state: 'running', page: page });
+    while (true) {
+      var res = await getPage(page);
+      if (!res) { post({ type: 'wcuk-history', state: 'stopped', why: 'Rafflex did not answer. Check you are signed in, then reload this page.', page: page }); break; }
+      var doc = parse(res.responseText || ''), tb = doc.querySelector('table');
+      if (!tb || !tb.tBodies[0]) { post({ type: 'wcuk-history', state: page === 1 ? 'signed_out' : 'done', page: page }); break; }
+      var rows = [].slice.call(tb.tBodies[0].rows).filter(function (r) { return /^\d+$/.test(cell(r, 0)); });
+      if (!rows.length) { if (cur && !firstDay && !done[cur.date]) post({ type: 'wcuk-history-day', day: finish(cur) }); post({ type: 'wcuk-history', state: 'done', page: page }); break; }
+      // After a resume, landing past the saved frontier would leave a gap: step back and look again.
+      if (resumed && !cur && page > 1 && isoDay(new Date(cell(rows[0], 5))) < saved.oldest) { page = Math.max(1, page - 100); await sleep(1000); continue; }
+      var stop = false;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i], dt = new Date(cell(r, 5)); if (isNaN(dt)) continue;
+        var d = isoDay(dt);
+        if (!cur || d !== cur.date) {
+          if (cur) {
+            // cur is now complete, unless the walk started part-way through it after a resume
+            if (!(firstDay && resumed) && cur.date !== today && !done[cur.date]) { post({ type: 'wcuk-history-day', day: finish(cur) }); sent++; }
+            if (cur.date < oldest) oldest = cur.date;
+            firstDay = false;
+          }
+          if (d < since) { stop = true; break; }
+          cur = blankDay(d);
+        }
+        if (!/complete/i.test(cell(r, 4))) continue;
+        var src = (cell(r, 2) || 'unknown').toLowerCase(), total = money(cell(r, 3)), h = dt.getHours();
+        var s = cur.by_source[src] = cur.by_source[src] || { orders: 0, revenue: 0 };
+        if (total > 0) { cur.orders++; s.orders++; cur.o[h]++; } else cur.zero_orders++;
+        cur.revenue += total; s.revenue += total; cur.r[h] += total;
+      }
+      // Caught up: the newest days are saved and no backfill is left, so stop once we reach a saved day.
+      if (!stop && !resumed && cur && done[cur.date] && cur.date < today && saved && saved.oldest <= since) stop = true;
+      // Also caught up when we reach two saved days in a row: everything older was saved by an earlier backfill.
+      if (!stop && !resumed && cur && cur.date < today && done[cur.date] && done[isoDay(new Date(new Date(cur.date + 'T12:00:00').getTime() - 864e5))]) stop = true;
+      GM_setValue(histKey(), { page: page, oldest: oldest });
+      post({ type: 'wcuk-history', state: stop ? 'done' : 'running', page: page, reached: cur && cur.date, sent: sent });
+      if (stop) { if (oldest <= since || (cur && cur.date < since)) GM_setValue(histKey(), { page: page, oldest: since }); break; }
+      page++;
+      await sleep(1000);
+    }
+    histBusy = false;
+  }
+
   // The page says hello when it loads; answer straight away.
   window.addEventListener('message', function (ev) {
+    if (ev.data && ev.data.type === 'wcuk-history-hello' && (onAnalytics() || onHQ())) {
+      var since = /^\d{4}-\d{2}-\d{2}$/.test(ev.data.since || '') ? ev.data.since : '2024-06-01';
+      post({ type: 'wcuk-helper', history: true });
+      history(Array.isArray(ev.data.have) ? ev.data.have : [], since);
+      return;
+    }
     if (!ev.data || !onPage()) return;
     if (ev.data.type === 'wcuk-dictate') { dictate(ev.data.action); return; }
     if (ev.data.type !== 'wcuk-sales-hello') return;
