@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WCUK live sales for Today's Push
 // @namespace    https://whiskyclubuk.com/
-// @version      2.0
+// @version      2.1
 // @updateURL    https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
 // @downloadURL  https://raw.githubusercontent.com/WhiskyClubUK/wcuk-email-art/claude/project-thread-pypykz/tools/wcuk-live-sales.user.js
 // @description  Every 60 seconds, reads Rafflex Analytics (from a pinned Analytics tab) and today's completed orders with your own sign-in and shows the totals on the Marketing Desk and HQ pages. On the Marketing Analytics and HQ pages it also reads past orders, a page at a time, and hands over each day's totals by hour and source. Reads only date, source and total; nothing about customers leaves the orders list.
@@ -60,18 +60,37 @@
   // reads them once rendered and hands them over through Tampermonkey's storage.
   async function analytics() {
     var a = GM_getValue('analytics', null);
-    if (!a) return { why: 'open Rafflex Analytics in a pinned tab' };
+    if (!a) return { why: 'open Rafflex Analytics in a pinned tab (whiskyclubuk.com/admin/analytics)' };
     if (a.day !== isoDay(new Date()) || Date.now() - a.at > 3 * 60 * 1000) return { why: 'Analytics tab last read ' + new Date(a.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) };
     return a;
   }
+  // 2.1 (14 Nov): Rafflex now remembers the last date range (it opened on "13th - 14th November"), so the tab stopped
+  // reading and the desk fell back to the orders list, which misses wallet credit and LIVE sales. The range is in the URL
+  // (?filters[startDate]=...&filters[endDate]=...), so the tab always loads today's range itself, and rolls over at midnight.
+  function todayUrl() {
+    var d = isoDay(new Date());
+    return SITE + '/admin/analytics/overview?filters[startDate]=' + d + '&filters[endDate]=' + d;
+  }
+  function onToday() {
+    var q = new URLSearchParams(location.search), d = isoDay(new Date());
+    return q.get('filters[startDate]') === d && q.get('filters[endDate]') === d;
+  }
   function analyticsTab() {
+    // A range Simon picked himself (in the URL) is left alone and not read. A bare Analytics link, or the tab this script
+    // put on today, is moved to today's range.
+    var mine = sessionStorage.getItem('wcuk-today') === '1', picked = new URLSearchParams(location.search).has('filters[startDate]');
+    if (!onToday()) {
+      if (mine || !picked) { sessionStorage.setItem('wcuk-today', '1'); location.replace(todayUrl()); }
+      return;
+    }
+    sessionStorage.setItem('wcuk-today', '1');
     // The cards count up from zero when the page loads, so only trust a figure once it has held still for 2 seconds.
     var tries = 0, prev = null, steady = 0;
     var t = setInterval(function () {
       tries++;
       var text = norm(document.body && document.body.textContent);
       var sales = cardValue(document, 'Total Revenue + Credit'), orders = cardValue(document, 'Orders made');
-      if (sales == null || !/Today\s*-/.test(text)) { if (tries > 80) clearInterval(t); return; }
+      if (sales == null || !onToday()) { if (tries > 80) clearInterval(t); return; }
       var key = sales + '|' + orders;
       steady = key === prev ? steady + 1 : 0; prev = key;
       if (steady >= 4) {
@@ -79,8 +98,12 @@
         GM_setValue('analytics', { sales: sales, orders: orders, day: isoDay(new Date()), at: Date.now() });
       } else if (tries > 80) clearInterval(t);
     }, 500);
-    // Reload once a minute for fresh figures, unless someone has picked a different date range.
-    setTimeout(function () { if (/Today\s*-/.test(norm(document.body.textContent))) location.reload(); }, EVERY_MS);
+    // Reload once a minute on today's range for fresh figures (this also moves the tab to the new day after midnight).
+    // If Simon has picked another range in this tab since (the URL changes), stop and leave it be.
+    var loaded = location.search;
+    setTimeout(function () {
+      if (location.search === loaded) location.replace(todayUrl()); else sessionStorage.removeItem('wcuk-today');
+    }, EVERY_MS);
   }
 
   // Rafflex's orders table (17 Oct layout): Order (with a <time datetime>), Customer, Paid, Source, Status. Columns are
